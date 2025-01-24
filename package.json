@@ -1,0 +1,19 @@
+{
+  "name": "digital-guruji",
+  "version": "1.0.0",
+  "description": "This is the assignment for full stack internship",
+  "license": "ISC",
+  "author": "Manuj Chaudhari",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "canvas": "^3.1.0",
+    "ffmpeg-static": "^5.2.0",
+    "ffprobe-static": "^3.1.0",
+    "fluent-ffmpeg": "^2.1.3"
+  }
+}
