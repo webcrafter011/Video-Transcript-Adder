@@ -90,32 +90,55 @@ async function addTranscriptsToVideo(
   outputVideo
 ) {
   return new Promise((resolve, reject) => {
+    console.log("Starting to add transcripts to video...");
+    console.log("Input video:", inputVideo);
+    console.log("Output video:", outputVideo);
+
+    // Generate text filters for each transcript
     const textFilters = transcriptionDetails
-      .map((transcript) => {
+      .map((transcript, index) => {
+        console.log(`Processing transcript ${index + 1}:`, transcript);
         const escapedText = escapeText(transcript.text);
         const startTime = transcript.start; // Start timestamp in seconds
         const endTime = transcript.end; // End timestamp in seconds
+
+        console.log(`Escaped text: ${escapedText}`);
+        console.log(`Start time: ${startTime}, End time: ${endTime}`);
 
         // Split the text into lines
         const maxLineWidth = 30; // Maximum characters per line
         const lines = splitTextIntoLines(escapedText, maxLineWidth);
 
+        console.log(`Split text into lines:`, lines);
+
         // Create a drawtext filter for each line
         return lines
-          .map(
-            (line, index) =>
-              `drawtext=text='${line}':fontsize=52:fontcolor=white:fontfile='C\\:/Windows/Fonts/Arial.ttf':x=(w-text_w)/2:y=(h-text_h-50-${
-                index * 60
-              }):enable='between(t,${startTime},${endTime})'`
-          )
+          .map((line, lineIndex) => {
+            const filter = `drawtext=text='${line}':fontsize=52:fontcolor=white:fontfile='C\\:/Windows/Fonts/Arial.ttf':x=(w-text_w)/2:y=(h-text_h-50-${
+              lineIndex * 60
+            }):enable='between(t,${startTime},${endTime})'`;
+            console.log(`Generated filter for line ${lineIndex + 1}:`, filter);
+            return filter;
+          })
           .join(",");
       })
       .join(",");
 
-    console.log("Applying text filters:", textFilters); // Log the filters for debugging
+    console.log("Final text filters:", textFilters);
 
-    ffmpeg(inputVideo)
+    // Create the ffmpeg command
+    const command = ffmpeg(inputVideo)
       .videoFilters(textFilters)
+      .on("start", (commandLine) => {
+        console.log("FFmpeg command started with the following command line:");
+        console.log(commandLine);
+      })
+      .on("stderr", (stderrLine) => {
+        console.log("FFmpeg stderr output:", stderrLine);
+      })
+      .on("progress", (progress) => {
+        console.log(`Processing: ${Math.round(progress.percent)}% done`);
+      })
       .on("error", (err) => {
         console.error("Error adding transcripts:", err.message);
         console.error("FFmpeg stderr:", err); // Log the full error
@@ -126,6 +149,8 @@ async function addTranscriptsToVideo(
         resolve();
       })
       .save(outputVideo);
+
+    console.log("FFmpeg command created, waiting for completion...");
   });
 }
 
