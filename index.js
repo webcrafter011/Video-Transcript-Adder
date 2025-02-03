@@ -1,3 +1,4 @@
+// index.js
 const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
@@ -20,25 +21,31 @@ async function downloadFile(url, outputPath) {
 
 // Helper function: Escape special characters in text
 function escapeText(text) {
-  return text.replace(/'/g, "'\\''").replace(/\\/g, "\\\\");
+  // For drawtext, we must escape certain characters like ':' and '\' and '''.
+  // We'll keep it simple and just escape single quotes:
+  return text.replace(/'/g, "\\'");
 }
 
-// Helper function: Split text into lines
+// Helper function: Split text into lines by max width
 function splitTextIntoLines(text, maxLineWidth) {
   const words = text.split(" ");
   const lines = [];
   let currentLine = "";
 
-  words.forEach((word) => {
-    if ((currentLine + word).length <= maxLineWidth) {
-      currentLine += `${word} `;
+  for (let word of words) {
+    // +1 because we add a space before word if not at start
+    if (currentLine.length + word.length + 1 <= maxLineWidth) {
+      currentLine += (currentLine === "" ? "" : " ") + word;
     } else {
-      lines.push(currentLine.trim());
-      currentLine = `${word} `;
+      lines.push(currentLine);
+      currentLine = word;
     }
-  });
+  }
 
-  if (currentLine) lines.push(currentLine.trim());
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+
   return lines;
 }
 
@@ -62,15 +69,16 @@ async function encodeToVertical(inputVideo, outputVideo) {
     ffmpeg(inputVideo)
       .outputOptions([
         "-vf",
-        "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920", // Scale and crop
+        "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
         "-c:v",
-        "libx264", // Video codec
+        "libx264",
         "-c:a",
-        "aac", // Audio codec
+        "aac",
         "-r",
-        "30", // Frame rate
+        "30",
+        // You can remove "-strict experimental" if your FFmpeg build doesn't need it:
         "-strict",
-        "experimental", // Allow experimental codecs
+        "experimental",
       ])
       .on("error", (err) => {
         console.error("Error encoding video:", err.message);
@@ -94,44 +102,53 @@ async function addTranscriptsToVideo(
     console.log("Input video:", inputVideo);
     console.log("Output video:", outputVideo);
 
-    // Generate text filters for each transcript
-    const textFilters = transcriptionDetails
-      .map((transcript, index) => {
-        console.log(`Processing transcript ${index + 1}:`, transcript);
-        const escapedText = escapeText(transcript.text);
-        const startTime = transcript.start; // Start timestamp in seconds
-        const endTime = transcript.end; // End timestamp in seconds
+    /**
+     * We will build an array of "drawtext=..." filters.
+     * Each transcript can have multiple lines, so each line becomes its own filter.
+     */
+    const filters = [];
 
-        console.log(`Escaped text: ${escapedText}`);
-        console.log(`Start time: ${startTime}, End time: ${endTime}`);
+    transcriptionDetails.forEach((transcript, index) => {
+      const escapedText = escapeText(transcript.text);
+      const startTime = transcript.start;
+      const endTime = transcript.end;
 
-        // Split the text into lines
-        const maxLineWidth = 30; // Maximum characters per line
-        const lines = splitTextIntoLines(escapedText, maxLineWidth);
+      // Split the text into lines
+      const maxLineWidth = 30;
+      const lines = splitTextIntoLines(escapedText, maxLineWidth);
 
-        console.log(`Split text into lines:`, lines);
+      // For each line, create a separate drawtext filter
+      lines.forEach((line, lineIndex) => {
+        // NOTE: If you want a specific font, uncomment the fontfile line
+        // and set the path carefully. Example for Windows:
+        // fontfile='C\\:/Windows/Fonts/arial.ttf' or
+        // fontfile='C\\\\Windows\\\\Fonts\\\\arial.ttf'
+        // Make sure you have that TTF file at that location.
+        const filter = [
+          `drawtext=text='${line}'`,
+          `fontsize=52`,
+          `fontcolor=white`,
+          // `fontfile='C\\\\Windows\\\\Fonts\\\\arial.ttf'`,  // Example Windows path
+          `x=(w-text_w)/2`,
+          // Move each subsequent line up by lineIndex * 60
+          `y=(h-text_h-50-${lineIndex * 60})`,
+          `enable='between(t,${startTime},${endTime})'`,
+        ].join(":");
 
-        // Create a drawtext filter for each line
-        return lines
-          .map((line, lineIndex) => {
-            const filter = `drawtext=text='${line}':fontsize=52:fontcolor=white:fontfile='C\\:/Windows/Fonts/Arial.ttf':x=(w-text_w)/2:y=(h-text_h-50-${
-              lineIndex * 60
-            }):enable='between(t,${startTime},${endTime})'`;
-            console.log(`Generated filter for line ${lineIndex + 1}:`, filter);
-            return filter;
-          })
-          .join(",");
-      })
-      .join(",");
+        filters.push(filter);
+      });
+    });
 
-    console.log("Final text filters:", textFilters);
+    // Join all drawtext filters by a comma so they become one combined filter:
+    const videoFilter = filters.join(",");
 
-    // Create the ffmpeg command
-    const command = ffmpeg(inputVideo)
-      .videoFilters(textFilters)
+    console.log("Final filter string:\n", videoFilter);
+
+    ffmpeg(inputVideo)
+      .outputOptions(["-c:a copy"]) // keep audio from input
+      .videoFilters(videoFilter)
       .on("start", (commandLine) => {
-        console.log("FFmpeg command started with the following command line:");
-        console.log(commandLine);
+        console.log("FFmpeg command:", commandLine);
       })
       .on("stderr", (stderrLine) => {
         console.log("FFmpeg stderr output:", stderrLine);
@@ -141,7 +158,6 @@ async function addTranscriptsToVideo(
       })
       .on("error", (err) => {
         console.error("Error adding transcripts:", err.message);
-        console.error("FFmpeg stderr:", err); // Log the full error
         reject(err);
       })
       .on("end", () => {
@@ -149,8 +165,6 @@ async function addTranscriptsToVideo(
         resolve();
       })
       .save(outputVideo);
-
-    console.log("FFmpeg command created, waiting for completion...");
   });
 }
 
@@ -188,6 +202,7 @@ async function addBackgroundAudio(video, audio, outputVideo) {
         "-c:v copy",
         "-c:a aac",
         "-shortest",
+        // map video from first input, audio from second
         "-map 0:v:0",
         "-map 1:a:0",
       ])
@@ -207,6 +222,7 @@ function cleanupTempDir(tempDir, finalOutputVideo) {
   const files = fs.readdirSync(tempDir);
   files.forEach((file) => {
     const filePath = path.join(tempDir, file);
+    // Keep the final output, remove everything else
     if (filePath !== finalOutputVideo) {
       fs.unlinkSync(filePath);
     }
@@ -270,11 +286,12 @@ async function generateVideo(transcriptionDetails, videoDetails, audioLink) {
     showLoadingBar(1, 1, "Adding transcripts");
 
     // Step 5: Download and add background audio
-    console.log("Adding background audio...");
+    console.log("Downloading background audio...");
     backgroundAudioPath = path.join(tempDir, "background_audio.mp3");
     await downloadFile(audioLink, backgroundAudioPath);
     showLoadingBar(1, 1, "Downloading audio");
 
+    console.log("Adding background audio...");
     const finalVideo = path.join(tempDir, "final_output.mp4");
     await addBackgroundAudio(
       finalVideoWithText,
